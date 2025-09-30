@@ -202,6 +202,101 @@ class HandTracker:
             )
         
         return distances
+    
+    def create_hand_visualization(self, landmark_list, canvas_size=(400, 400)):
+        """
+        Create a centered visualization of the hand landmarks
+        
+        Args:
+            landmark_list: List of landmark positions
+            canvas_size: Size of the visualization canvas (width, height)
+            
+        Returns:
+            canvas: Image with centered hand visualization
+        """
+        canvas = np.zeros((canvas_size[1], canvas_size[0], 3), dtype=np.uint8)
+        
+        if len(landmark_list) < 21:
+            return canvas
+        
+        # Extract x, y coordinates
+        points = np.array([[lm[1], lm[2]] for lm in landmark_list])
+        
+        # Find bounding box
+        min_x, min_y = np.min(points, axis=0)
+        max_x, max_y = np.max(points, axis=0)
+        
+        # Calculate center and scale
+        center_x = (min_x + max_x) / 2
+        center_y = (min_y + max_y) / 2
+        
+        # Scale to fit canvas with some padding
+        padding = 50
+        scale_x = (canvas_size[0] - 2 * padding) / (max_x - min_x) if max_x != min_x else 1
+        scale_y = (canvas_size[1] - 2 * padding) / (max_y - min_y) if max_y != min_y else 1
+        scale = min(scale_x, scale_y)
+        
+        # Transform points to canvas coordinates
+        canvas_center_x = canvas_size[0] // 2
+        canvas_center_y = canvas_size[1] // 2
+        
+        transformed_points = []
+        for lm in landmark_list:
+            x = int((lm[1] - center_x) * scale + canvas_center_x)
+            y = int((lm[2] - center_y) * scale + canvas_center_y)
+            transformed_points.append([lm[0], x, y])
+        
+        # Draw hand connections
+        connections = [
+            # Thumb
+            [0, 1], [1, 2], [2, 3], [3, 4],
+            # Index finger
+            [0, 5], [5, 6], [6, 7], [7, 8],
+            # Middle finger
+            [0, 9], [9, 10], [10, 11], [11, 12],
+            # Ring finger
+            [0, 13], [13, 14], [14, 15], [15, 16],
+            # Pinky
+            [0, 17], [17, 18], [18, 19], [19, 20],
+            # Palm connections
+            [5, 9], [9, 13], [13, 17]
+        ]
+        
+        # Draw connections
+        for connection in connections:
+            if connection[0] < len(transformed_points) and connection[1] < len(transformed_points):
+                pt1 = (transformed_points[connection[0]][1], transformed_points[connection[0]][2])
+                pt2 = (transformed_points[connection[1]][1], transformed_points[connection[1]][2])
+                cv2.line(canvas, pt1, pt2, (100, 100, 100), 2)
+        
+        # Draw landmarks
+        for i, point in enumerate(transformed_points):
+            x, y = point[1], point[2]
+            color = self.get_landmark_color(i)
+            cv2.circle(canvas, (x, y), 6, color, -1)
+            cv2.circle(canvas, (x, y), 6, (255, 255, 255), 1)
+            
+            # Draw landmark numbers
+            cv2.putText(canvas, str(i), (x - 8, y + 4), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 255, 255), 1)
+        
+        # Add title
+        cv2.putText(canvas, 'Hand Structure Visualization', (10, 25), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        
+        # Add landmark legend
+        legend_y = 50
+        finger_names = ['Wrist', 'Thumb', 'Index', 'Middle', 'Ring', 'Pinky']
+        colors = [(255, 255, 255), (0, 255, 0), (255, 0, 0), (0, 255, 255), 
+                 (255, 0, 255), (0, 165, 255)]
+        
+        for i, (name, color) in enumerate(zip(finger_names, colors)):
+            y_pos = legend_y + i * 20
+            cv2.circle(canvas, (15, y_pos), 5, color, -1)
+            cv2.putText(canvas, name, (25, y_pos + 4), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        return canvas
 
 
 def main():
@@ -221,6 +316,9 @@ def main():
     prev_time = 0
     
     print("Starting hand recognition...")
+    print("Two windows will open:")
+    print("- Main camera feed with hand tracking")
+    print("- Centered hand structure visualization")
     print("Controls:")
     print("- Press 'q' to quit")
     print("- Press 'l' to toggle landmark labels")
@@ -241,6 +339,9 @@ def main():
         img = detector.find_hands(img)
         landmark_list = detector.find_position(img, draw=True, draw_labels=show_labels)
         
+        # Create hand visualization window
+        hand_viz = np.zeros((400, 400, 3), dtype=np.uint8)
+        
         # Display information if hands are detected
         if len(landmark_list) != 0:
             # Get finger status
@@ -249,6 +350,9 @@ def main():
             
             # Calculate distances
             distances = detector.calculate_distances(landmark_list)
+            
+            # Create centered hand visualization
+            hand_viz = detector.create_hand_visualization(landmark_list)
             
             # Display information on screen
             cv2.putText(img, f'Fingers Up: {finger_count}', (50, 50), 
@@ -272,6 +376,10 @@ def main():
                     pt1 = (landmark_list[fingertips[i]][1], landmark_list[fingertips[i]][2])
                     pt2 = (landmark_list[fingertips[i+1]][1], landmark_list[fingertips[i+1]][2])
                     cv2.line(img, pt1, pt2, (0, 255, 0), 2)
+        else:
+            # Show empty visualization when no hand is detected
+            cv2.putText(hand_viz, 'No Hand Detected', (100, 200), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (100, 100, 100), 2)
         
         # Calculate and display FPS
         current_time = time.time()
@@ -284,8 +392,11 @@ def main():
         cv2.putText(img, "Press 'q' to quit, 'l' for labels, 's' to save", 
                    (50, img.shape[0] - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         
-        # Display the image
+        # Display the main camera image
         cv2.imshow('Hand Recognition - Finger Joint Detection', img)
+        
+        # Display the centered hand visualization
+        cv2.imshow('Hand Structure Visualization', hand_viz)
         
         # Handle key presses
         key = cv2.waitKey(1) & 0xFF
